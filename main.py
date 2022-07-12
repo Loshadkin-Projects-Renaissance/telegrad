@@ -1,146 +1,14 @@
-import config as os
-from config import *
-import telebot
-import time
-import random
-import threading
-from telebot import types
-from pymongo import MongoClient
-import traceback
+from startup import *
+from lambdas import *
 
-# НЕ СПУСКАЙТЕСЬ НИЖЕ ТУТ ДУШИ МЕРТВЫХ ДЕВСТВЕННИЦ
+db.users.update_many({}, {'$set': {'human.walking': False}})
 
-
-token = os.environ['TELEGRAM_TOKEN']
-bot = telebot.TeleBot(token)
-
-client = MongoClient(os.environ['database'])
-db = client.lifesim
-users = db.users
-locs = db.locs
-kvs = db.kvs
-
-users.update_many({}, {'$set': {'human.walking': False}})
-
-
-# kvs.update_many({},{'$set':{'locked':True}})
-# for ids in kvs.find({}):
-#    bot.send_message(ids['id'], text)
-# users.update_many({},{'$set':{'human.take_away':False, 'human.mix':[]}})
-
-# ААААААААААААААААААААААаааааааааааааааааааааааааааааааааааааА
 def currentshop(human):
     shop = None
     for building in streets[human['position']['street']]['buildings']:
         if streets[human['position']['street']]['buildings'][building]['code'] == human['position']['building']:
             shop = streets[human['position']['street']]['buildings'][building]
     return shop
-
-
-def init_product(food, cost=0, give_desc=False):
-    name = 'Не опознано'
-    value = 0
-    food_desc = 'Неизвестно'
-    code = food
-    weight = 1
-    if food == 'bread':
-        name = 'Хлеб'
-        value = 1
-        food_desc = 'Обычный хлеб. Восстанавливает 1🍗.'
-        weight = 2
-
-    elif food == 'sousage':
-        name = 'Сосиски'
-        value = 4
-        food_desc = 'Сосиски из свинины. Восстанавливают 4🍗.'
-        weight = 6
-
-    elif food == 'conserves':
-        name = 'Рыбные консервы'
-        value = 3
-        food_desc = 'Дешёвые консервы. Для тех, кто не очень богат. Восстанавливают 3🍗.'
-        weight = 5
-
-    obj = {
-        'cost': cost,
-        'value': value,
-        'name': name,
-        'code': code,
-        'weight': weight
-    }
-    if give_desc:
-        return food_desc
-    return obj
-
-
-streets = {
-    'bitard_street': {
-        'name': 'Битард-стрит',
-        'nearlocs': ['meet_street', 'shop_street'],
-        'code': 'bitard_street',
-        'homes': ['17', '18', '30'],                                     # УХОДИ
-        'buildings': {},
-        'humans': []
-    },
-
-    'new_street': {
-        'name': 'Новая',
-        'nearlocs': ['meet_street', 'shop_street'],
-        'code': 'new_street',
-        'homes': ['101', '228'],
-        'buildings': {},
-        'humans': []
-    },
-
-    'shop_street': {
-        'name': 'Торговая',
-        'nearlocs': ['bitard_street', 'new_street'],
-        'code': 'shop_street',
-        'homes': ['290', '311', '81'],
-        'buildings': {
-            'sitniy': {
-                'name': 'Сытный',
-                'type': 'shop',
-                'street': 'shop_street',
-                'humans': [],
-                'code': 'sitniy',
-                'products': {
-                    'bread': init_product('bread', 50),
-                    'sousage': init_product('sousage', 300),
-                    'conserves': init_product('conserves', 150)
-                }
-            }
-        },
-        'humans': []
-    },
-
-    'meet_street': {
-        'name': 'Встречная',
-        'nearlocs': ['new_street', 'bitard_street'],
-        'code': 'meet_street',
-        'homes': [],
-        'buildings': {},
-        'humans': []
-    }
-
-}
-
-# locs.remove({'code':'shop_street'})
-
-for street in streets:
-    street = streets[street]
-    if not locs.find_one({'code': street['code']}):
-        locs.insert_one(street)
-
-for street in locs.find({}):
-    for building in street['buildings']:
-        building = street['buildings'][building]
-        if building['type'] == 'shop':
-            for product in streets[street['code']]['buildings'][building['code']]['products']:
-                product = streets[street['code']]['buildings'][building['code']]['products'][product]
-                if product['code'] not in building['products']:
-                    locs.update_one({'code': street['code']},
-                                    {'$set': {f'buildings.{building["code"]}.products.{product["code"]}': product}})
 
 
 def reply_kb(user):
@@ -158,12 +26,11 @@ def reply_kb(user):
     return kb
 
 
-@bot.message_handler(commands=['clear_all'])
+@bot.message_handler(commands=['clear_all'], func=admin_lambda)
 def clearall(m):
-    if m.from_user.id == 441399484:
-        users.remove({})
-        kvs.remove({})
-        bot.send_message(m.chat.id, 'Очистил юзеров и квартиры.')
+    db.users.drop()
+    db.kvs.drop()
+    bot.send_message(m.chat.id, 'Очистил юзеров и квартиры.')
 
 
 @bot.message_handler(func=lambda m: m.text == '📱Искать подработку')
@@ -178,7 +45,7 @@ def sleeeep(m):
 
 @bot.message_handler(func=lambda m: m.text == '👤Профиль')
 def profile(m):
-    user = users.find_one({'id': m.from_user.id})
+    user = db.users.find_one({'id': m.from_user.id})
     if user == None:
         return
     if user['start_stats'] == True:
@@ -195,9 +62,9 @@ def profile(m):
     bot.send_message(m.chat.id, text)
 
 
-@bot.message_handler(func=lambda m: m.text == '/start' and users.find_one({'id': m.from_user.id}) != None)
+@bot.message_handler(func=lambda m: m.text == '/start' and db.users.find_one({'id': m.from_user.id}) != None)
 def starts(m):
-    user = users.find_one({'id': m.from_user.id})
+    user = db.users.find_one({'id': m.from_user.id})
     if user['start_stats'] == True:
         return
     kb = reply_kb(user)
@@ -225,7 +92,7 @@ def look(m):
     if user['human']['name'] == human_name:
         bot.reply_to(m, 'Нельзя взаимодействовать с самим собой!')
         return
-    friend = users.find_one({'human.name': human_name})
+    friend = db.users.find_one({'human.name': human_name})
     if not friend:
         bot.reply_to(m, 'Такого юзера нет!')
         return
@@ -250,7 +117,7 @@ def doings_locks(m):
         bot.send_message(m.chat.id, 'Выберите продукты, чтобы положить/взять.', reply_markup=kb)
 
     elif m.text == '🔐Закрыть/открыть квартиру':
-        kv = kvs.find_one({'id': h['position']['flat']})
+        kv = db.kvs.find_one({'id': h['position']['flat']})
         if kv == None:
             bot.send_message(m.chat.id, 'Вы сейчас не в квартире!')
             return
@@ -259,10 +126,10 @@ def doings_locks(m):
             bot.send_message(m.chat.id, 'У вас нет ключей от этой квартиры!')
             return
         if kv['locked']:
-            kvs.update_one({'id': kv['id']}, {'$set': {'locked': False}})
+            db.kvs.update_one({'id': kv['id']}, {'$set': {'locked': False}})
             bot.send_message(m.chat.id, 'Вы открыли квартиру!')
         else:
-            kvs.update_one({'id': kv['id']}, {'$set': {'locked': True}})
+            db.kvs.update_one({'id': kv['id']}, {'$set': {'locked': True}})
             bot.send_message(m.chat.id,
                              'Вы закрыли квартиру на ключ! Теперь зайти в неё смогут только те, у кого есть ключ.')
 
@@ -278,7 +145,7 @@ def doings_locks(m):
 
 def in_cafe(user):
     h = user['human']
-    kv = kvs.find_one({'id': h['position']['flat']})
+    kv = db.kvs.find_one({'id': h['position']['flat']})
     cafe = None
     for ids in streets:
         street = streets[ids]
@@ -299,10 +166,10 @@ def in_cafe(user):
 @bot.callback_query_handler(func=lambda c: c.data.split('?')[0] == 'phone')
 def phone_acts(c):
     kb = types.InlineKeyboardMarkup()
-    user = users.find_one({'id': c.from_user.id})
+    user = db.users.find_one({'id': c.from_user.id})
     h = user['human']
     action = c.data.split('?')[1]
-    friend = users.find_one({'id': int(c.data.split('?')[2])})
+    friend = db.users.find_one({'id': int(c.data.split('?')[2])})
     print(friend)
     print(user)
     if action == 'give_keys':
@@ -314,13 +181,13 @@ def phone_acts(c):
     if action == 'give_key':
         key = c.data.split('?')[3]
         friend['human']['keys'].append(key)
-        users.update_one({'id': friend['id']}, {'$set': friend})
+        db.users.update_one({'id': friend['id']}, {'$set': friend})
         medit(message_text='Ключ ' + str(key) + ' передан.', chat_id=c.from_user.id, message_id=c.message.message_id)
         bot.send_message(friend['id'], 'Вам дали ' + str(key) + '!')
     if action == 'ungive_key':
         key = c.data.split('?')[3]
         friend['human']['keys'].remove(key)
-        users.update_one({'id': friend['id']}, {'$set': friend})
+        db.users.update_one({'id': friend['id']}, {'$set': friend})
         medit(message_text='Ключ ' + str(key) + ' отобран.', chat_id=c.from_user.id, message_id=c.message.message_id)
         bot.send_message(friend['id'], 'У вас отобрали ключ ' + str(key) + '!')
     if action == 'throw_away':
@@ -337,9 +204,9 @@ def phone_acts(c):
             medit(message_text='Выберите ключ, который хотите отобрать.', chat_id=c.from_user.id,
                   message_id=c.message.message_id, reply_markup=kb)
         else:
-            kvs.update_one({'id': friend['human']['position']['flat']}, {'$pull': {'humans': friend['id']}})
+            db.kvs.update_one({'id': friend['human']['position']['flat']}, {'$pull': {'humans': friend['id']}})
             friend['human']['position']['flat'] = None
-            users.update_one({'id': friend['id']}, {'$set': friend})
+            db.users.update_one({'id': friend['id']}, {'$set': friend})
             medit(message_text='Вы выгнали ' + str(friend["human"]["name"]) + ' из квартиры!', chat_id=c.from_user.id,
                   message_id=c.message.message_id)
             bot.send_message(friend['id'], 'Вас выгнали из квартиры и теперь вы на улице!')
@@ -347,7 +214,7 @@ def phone_acts(c):
 
 @bot.callback_query_handler(func=lambda call: call.data.split('?')[0] == 'cafe')
 def cafeacts(call):
-    user = users.find_one({'id': call.from_user.id})
+    user = db.users.find_one({'id': call.from_user.id})
     h = user['human']
     if not in_cafe(user):
         bot.answer_callback_query(call.id, 'Чтобы перекусить, вам нужно быть в квартире или кафе!', show_alert=True)
@@ -362,8 +229,8 @@ def cafeacts(call):
 
         inv = h['inv']
         inv.remove(item)
-        users.update_one({'id': user['id']}, {'$push': {'human.mix': item}})
-        users.update_one({'id': user['id']}, {'$set': {'human.inv': inv}})
+        db.users.update_one({'id': user['id']}, {'$push': {'human.mix': item}})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.inv': inv}})
         bot.answer_callback_query(call.id, 'Новый продукт успешно добавлен в список для смешивания!', show_alert=True)
 
     elif what == 'take_away':
@@ -374,15 +241,15 @@ def cafeacts(call):
 
         mix = h['mix']
         mix.remove(item)
-        users.update_one({'id': user['id']}, {'$set': {'human.mix': mix}})
-        users.update_one({'id': user['id']}, {'$push': {'human.inv': item}})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.mix': mix}})
+        db.users.update_one({'id': user['id']}, {'$push': {'human.inv': item}})
         bot.answer_callback_query(call.id, 'Продукт удалён из списка для смешивания!', show_alert=True)
 
     elif what == 'set_take_away':
-        users.update_one({'id': user['id']}, {'$set': {'human.take_away': True}})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.take_away': True}})
 
     elif what == 'unset_take_away':
-        users.update_one({'id': user['id']}, {'$set': {'human.take_away': False}})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.take_away': False}})
 
     elif what == 'ready':
         hunger = 0
@@ -399,12 +266,12 @@ def cafeacts(call):
         if 'bread' in h['mix'] and 'conserves' in h['mix']:
             hunger += 1
 
-        users.update_one({'id': user['id']}, {'$inc': {'human.hunger': hunger}})
-        users.update_one({'id': user['id']}, {'$set': {'human.mix': []}})
-        user = users.find_one({'id': user['id']})
+        db.users.update_one({'id': user['id']}, {'$inc': {'human.hunger': hunger}})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.mix': []}})
+        user = db.users.find_one({'id': user['id']})
         h = user['human']
         if h['hunger'] > h['maxhunger']:
-            users.update_one({'id': user['id']}, {'$set': {'human.hunger': h['maxhunger']}})
+            db.users.update_one({'id': user['id']}, {'$set': {'human.hunger': h['maxhunger']}})
         medit('Вы смешали ингредиенты, и съели получившееся блюдо. Восстановлено ' + str(hunger) + '🍗.',
               call.message.chat.id, call.message.message_id)
         return
@@ -418,7 +285,7 @@ def cafeacts(call):
 
 
 def get_eating(user):
-    user = users.find_one({'id': user['id']})
+    user = db.users.find_one({'id': user['id']})
     h = user['human']
     kb = types.InlineKeyboardMarkup()
     mix = ''
@@ -443,7 +310,7 @@ def get_eating(user):
 
 
 def get_fridge(user):
-    user = users.find_one({'id': user['id']})
+    user = db.users.find_one({'id': user['id']})
     h = user['human']
     kb = types.InlineKeyboardMarkup()
     br = ''
@@ -451,7 +318,7 @@ def get_fridge(user):
     if h['br'] == True:
         br = '✅'
         kl = '☑'
-        kv = kvs.find_one({'id': int(h['position']['flat'])})
+        kv = db.kvs.find_one({'id': int(h['position']['flat'])})
         if kv == None:
             return None
         for ids in kv['objects']['fridge']['inv']:
@@ -470,11 +337,11 @@ def get_fridge(user):
 
 @bot.callback_query_handler(func=lambda call: call.data.split('?')[0] == 'fridge')
 def fridgeacts(call):
-    user = users.find_one({'id': call.from_user.id})
+    user = db.users.find_one({'id': call.from_user.id})
     if user == None:
         return
     h = user['human']
-    kv = kvs.find_one({'id': h['position']['flat']})
+    kv = db.kvs.find_one({'id': h['position']['flat']})
     if kv == None:
         medit('Вы сейчас не в квартире!', call.message.chat.id, call.message.message_id)
         return
@@ -484,14 +351,14 @@ def fridgeacts(call):
         return
     act = call.data.split('?')[1]
     if act == 'set_br':
-        users.update_one({'id': user['id']}, {'$set': {'human.br': True, 'human.kl': False}})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.br': True, 'human.kl': False}})
         bot.answer_callback_query(call.id, 'Выбрано - брать продукты!', show_alert=True)
         kb = get_fridge(user)
         medit('Выберите продукты, чтобы положить/взять.', call.message.chat.id, call.message.message_id,
               reply_markup=kb)
 
     elif act == 'set_kl':
-        users.update_one({'id': user['id']}, {'$set': {'human.br': False, 'human.kl': True}})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.br': False, 'human.kl': True}})
         bot.answer_callback_query(call.id, 'Выбрано - класть продукты!', show_alert=True)
         kb = get_fridge(user)
         medit('Выберите продукты, чтобы положить/взять.', call.message.chat.id, call.message.message_id,
@@ -502,7 +369,7 @@ def fridgeacts(call):
         if what not in h['inv']:
             bot.answer_callback_query(call.id, 'У вас этого нет!', show_alert=True)
             return
-        kv = kvs.find_one({'id': h['position']['flat']})
+        kv = db.kvs.find_one({'id': h['position']['flat']})
         weight = init_product(what)['weight']
         alred = 0
         for ids in kv['objects']['fridge']['inv']:
@@ -512,16 +379,16 @@ def fridgeacts(call):
             return
         inv = h['inv']
         inv.remove(what)
-        kvs.update_one({'id': kv['id']}, {'$push': {'objects.fridge.inv': what}})
-        users.update_one({'id': user['id']}, {'$set': {'human.inv': inv}})
+        db.kvs.update_one({'id': kv['id']}, {'$push': {'objects.fridge.inv': what}})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.inv': inv}})
         bot.answer_callback_query(call.id, 'Вы положили продукт в холодильник!', show_alert=True)
-        user = users.find_one({'id': user['id']})
+        user = db.users.find_one({'id': user['id']})
         kb = get_fridge(user)
         medit('Выберите продукты, чтобы положить/взять.', call.message.chat.id, call.message.message_id,
               reply_markup=kb)
 
     elif act == 'take':
-        kv = kvs.find_one({'id': h['position']['flat']})
+        kv = db.kvs.find_one({'id': h['position']['flat']})
         what = call.data.split('?')[2]
         if what not in kv['objects']['fridge']['inv']:
             bot.answer_callback_query(call.id, 'В холодильнике этого нет!', show_alert=True)
@@ -535,10 +402,10 @@ def fridgeacts(call):
             return
         inv = kv['objects']['fridge']['inv']
         inv.remove(what)
-        kvs.update_one({'id': kv['id']}, {'$set': {'objects.fridge.inv': inv}})
-        users.update_one({'id': user['id']}, {'$push': {'human.inv': what}})
+        db.kvs.update_one({'id': kv['id']}, {'$set': {'objects.fridge.inv': inv}})
+        db.users.update_one({'id': user['id']}, {'$push': {'human.inv': what}})
         bot.answer_callback_query(call.id, 'Вы взяли продукт из холодильника!', show_alert=True)
-        user = users.find_one({'id': user['id']})
+        user = db.users.find_one({'id': user['id']})
         kb = get_fridge(user)
         medit('Выберите продукты, чтобы положить/взять.', call.message.chat.id, call.message.message_id,
               reply_markup=kb)
@@ -577,7 +444,7 @@ def doings(m):
                 avalaible_locs.append('building?' + street['buildings'][ids]['code'])
 
             for ids in h['keys']:
-                kv = kvs.find_one({'id': int(ids.split('#')[2])})
+                kv = db.kvs.find_one({'id': int(ids.split('#')[2])})
                 if kv['home'] in street['homes'] and kv['street'] == street['code']:
                     avalaible_locs.append('home?' + str(kv['id']))
 
@@ -627,11 +494,11 @@ def doings(m):
                 bot.send_message(m.chat.id, 'Вы не можете попасть на эту улицу отсюда!')
                 return
             if h['position']['flat'] != None:
-                kv = kvs.find_one({'id': h['position']['flat']})
+                kv = db.kvs.find_one({'id': h['position']['flat']})
                 if kv['street'] != newstr['code']:
                     bot.send_message(m.chat.id, 'Вы не можете попасть на эту улицу отсюда!')
                     return
-            users.update_one({'id': user['id']}, {'$set': {'human.walking': True}})
+            db.users.update_one({'id': user['id']}, {'$set': {'human.walking': True}})
             if h['position']['flat'] != None:
                 threading.Timer(random.randint(50, 70), endwalk, args=[user, newstr, 'flat']).start()
                 bot.send_message(m.chat.id, 'Вы выходите из квартиры. Окажетесь на улице примерно через минуту.')
@@ -645,7 +512,7 @@ def doings(m):
 
         elif what == 'Квартира':
             try:
-                kv = kvs.find_one({'id': int(which)})
+                kv = db.kvs.find_one({'id': int(which)})
                 if kv == None:
                     raise
             except:
@@ -663,7 +530,7 @@ def doings(m):
                 bot.send_message(m.chat.id, 'Вы не можете попасть в эту квартиру отсюда!')
                 return
 
-            users.update_one({'id': user['id']}, {'$set': {'human.walking': True}})
+            db.users.update_one({'id': user['id']}, {'$set': {'human.walking': True}})
             threading.Timer(random.randint(50, 70), endwalk_flat, args=[user, kv]).start()
             bot.send_message(m.chat.id,
                              'Вы начали подниматься в квартиру ' + str(which) + '. Дойдёте примерно через минуту.')
@@ -685,41 +552,41 @@ def doings(m):
                 bot.send_message(m.chat.id, 'Вы не можете попасть в этот магазин отсюда!')
                 return
 
-            users.update_one({'id': user['id']}, {'$set': {'human.walking': True}})
+            db.users.update_one({'id': user['id']}, {'$set': {'human.walking': True}})
             threading.Timer(random.randint(50, 70), endwalk_build, args=[user, shop]).start()
             bot.send_message(m.chat.id, 'Вы направились в магазин ' + str(which) + '. Дойдёте примерно через минуту.')
 
 
 def endwalk_flat(user, kv):
     try:
-        user = users.find_one({'id': user['id']})
+        user = db.users.find_one({'id': user['id']})
         h = user['human']
-        users.update_one({'id': user['id']}, {'$set': {'human.walking': False}})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.walking': False}})
         if len(user['human']['shop_inv']) > 0:
             bot.send_message(user['id'],
                              'Вы попытались выйти из магазина, но вас остановил охранник. Сначала оплатите покупки!')
             return
         h = user['human']
-        kv = kvs.find_one({'id': kv['id']})
+        kv = db.kvs.find_one({'id': kv['id']})
         if kv['street'] + '#' + kv['home'] + '#' + str(kv['id']) not in h['keys'] and kv['locked']:
             bot.send_message(user['id'],
                              'Вы попытались зайти в квартиру ' + str(kv['id']) + ', но она оказалась закрыта на ключ!')
             return
-        curstr = locs.find_one({'code': h['position']['street']})
+        curstr = db.locs.find_one({'code': h['position']['street']})
         for ids in curstr['humans']:
             if ids != user['id']:
                 print(ids)
-                user2 = users.find_one({'id': ids})
+                user2 = db.users.find_one({'id': ids})
                 h2 = user2['human']
                 if h2['position']['flat'] == None and h2['position']['building'] == None:
                     bot.send_message(ids, h['name'] + ' покидает улицу!')
-        kvs.update_one({'id': kv['id']}, {'$push': {'humans': user['id']}})
-        users.update_one({'id': user['id']}, {'$set': {'human.position.building': None}})
-        users.update_one({'id': user['id']}, {'$set': {'human.position.flat': kv['id']}})
-        user = users.find_one({'id': user['id']})
+        db.kvs.update_one({'id': kv['id']}, {'$push': {'humans': user['id']}})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.position.building': None}})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.position.flat': kv['id']}})
+        user = db.users.find_one({'id': user['id']})
         kb = reply_kb(user)
         bot.send_message(user['id'], 'Вы зашли в квартиру ' + str(kv['id']) + '!', reply_markup=kb)
-        kv = kvs.find_one({'id': kv['id']})
+        kv = db.kvs.find_one({'id': kv['id']})
         for ids in kv['humans']:
             if int(ids) != user['id']:
                 bot.send_message(ids, 'В квартиру заходит ' + desc(user))
@@ -727,43 +594,43 @@ def endwalk_flat(user, kv):
         text = 'В квартире вы видите следующих людей:\n\n'
         for ids in kv['humans']:
             if ids != user['id']:
-                text += desc(users.find_one({'id': ids}), True) + '\n\n'
+                text += desc(db.users.find_one({'id': ids}), True) + '\n\n'
 
         if text != 'В квартире вы видите следующих людей:\n\n':
             bot.send_message(user['id'], text)
 
     except:
-        bot.send_message(441399484, traceback.format_exc())
+        bot.send_message(admin_id, traceback.format_exc())
 
 
 def endwalk_build(user, build):
     try:
-        user = users.find_one({'id': user['id']})
+        user = db.users.find_one({'id': user['id']})
         h = user['human']
-        users.update_one({'id': user['id']}, {'$set': {'human.walking': False}})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.walking': False}})
         if len(user['human']['shop_inv']) > 0:
             bot.send_message(user['id'],
                              'Вы попытались выйти из магазина, но вас остановил охранник. Сначала оплатите покупки!')
             return
 
-        curstr = locs.find_one({'code': h['position']['street']})
+        curstr = db.locs.find_one({'code': h['position']['street']})
         for ids in curstr['humans']:
             if ids != user['id']:
-                user2 = users.find_one({'id': ids})
+                user2 = db.users.find_one({'id': ids})
                 h2 = user2['human']
                 if h2['position']['flat'] == None and h2['position']['building'] == None:
                     bot.send_message(ids, h['name'] + ' покидает улицу!')
-        locs.update_one({'code': build['street']}, {'$push': {'buildings.' + build['code'] + '.humans': user['id']}})
-        users.update_one({'id': user['id']}, {'$set': {'human.position.flat': None}})
-        users.update_one({'id': user['id']}, {'$set': {'human.position.building': build['code']}})
-        user = users.find_one({'id': user['id']})
+        db.locs.update_one({'code': build['street']}, {'$push': {'buildings.' + build['code'] + '.humans': user['id']}})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.position.flat': None}})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.position.building': build['code']}})
+        user = db.users.find_one({'id': user['id']})
         kb = reply_kb(user)
 
         if build['type'] == 'shop':
             bot.send_message(user['id'], 'Вы зашли в магазин ' + build['name'] + '!', reply_markup=kb)
             kb = getshop(build, user)
             bot.send_message(user['id'], 'На полках магазина вы видите следующий ассортимент:', reply_markup=kb)
-        build = locs.find_one({'code': build['street']})['buildings'][build['code']]
+        build = db.locs.find_one({'code': build['street']})['buildings'][build['code']]
         for ids in build['humans']:
             if int(ids) != user['id']:
                 if build['type'] == 'shop':
@@ -774,13 +641,13 @@ def endwalk_build(user, build):
 
         for ids in build['humans']:
             if ids != user['id']:
-                text += desc(users.find_one({'id': ids}), True) + '\n\n'
+                text += desc(db.users.find_one({'id': ids}), True) + '\n\n'
 
         if build['type'] == 'shop':
             if text != 'В магазине вы видите следующих людей:\n\n':
                 bot.send_message(user['id'], text)
     except:
-        bot.send_message(441399484, traceback.format_exc())
+        bot.send_message(admin_id, traceback.format_exc())
 
 
 def getshop(shop, user=None):
@@ -891,54 +758,54 @@ def desc(user, high=False):
 
 def endwalk(user, newstr, start='street'):
     try:
-        user = users.find_one({'id': user['id']})
+        user = db.users.find_one({'id': user['id']})
         h = user['human']
-        users.update_one({'id': user['id']}, {'$set': {'human.walking': False}})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.walking': False}})
         if len(user['human']['shop_inv']) > 0:
             bot.send_message(user['id'],
                              'Вы попытались выйти из магазина, но вас остановил охранник. Сначала оплатите покупки!')
             return
-        locs.update_one({'code': user['human']['position']['street']}, {'$pull': {'humans': user['id']}})
-        users.update_one({'id': user['id']}, {'$set': {'human.position.street': newstr['code']}})
+        db.locs.update_one({'code': user['human']['position']['street']}, {'$pull': {'humans': user['id']}})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.position.street': newstr['code']}})
         if start == 'flat':
-            kvs.update_one({'id': user['human']['position']['flat']}, {'$pull': {'humans': user['id']}})
-            curflat = kvs.find_one({'id': h['position']['flat']})
+            db.kvs.update_one({'id': user['human']['position']['flat']}, {'$pull': {'humans': user['id']}})
+            curflat = db.kvs.find_one({'id': h['position']['flat']})
             for ids in curflat['humans']:
                 if ids != user['id']:
                     bot.send_message(ids, h['name'] + ' покидает квартиру!')
         if start == 'building':
             b = user['human']['position']['building']
             h = user['human']
-            locs.update_one({'code': user['human']['position']['street']},
+            db.locs.update_one({'code': user['human']['position']['street']},
                             {'$pull': {'buildings.' + b + '.humans': user['id']}})
-            curstr = locs.find_one({'code': h['position']['street']})
+            curstr = db.locs.find_one({'code': h['position']['street']})
             for ids in curstr['buildings'][b]['humans']:
                 if ids != user['id']:
                     bot.send_message(ids, h['name'] + ' покидает здание!')
 
         if start == 'street':
             h = user['human']
-            curstr = locs.find_one({'code': h['position']['street']})
+            curstr = db.locs.find_one({'code': h['position']['street']})
             for ids in curstr['humans']:
                 if ids != user['id']:
-                    user2 = users.find_one({'id': ids})
+                    user2 = db.users.find_one({'id': ids})
                     h2 = user2['human']
                     if h2['position']['flat'] == None and h2['position']['building'] == None:
                         bot.send_message(ids, h['name'] + ' покидает улицу!')
 
-        users.update_one({'id': user['id']}, {'$set': {'human.position.building': None, 'human.position.flat': None}})
-        user = users.find_one({'id': user['id']})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.position.building': None, 'human.position.flat': None}})
+        user = db.users.find_one({'id': user['id']})
         kb = reply_kb(user)
         if start == 'street':
             bot.send_message(user['id'], 'Гуляя по городским переулкам, вы дошли до улицы ' + newstr['name'] + '!',
                              reply_markup=kb)
         elif start == 'flat' or start == 'building':
             bot.send_message(user['id'], 'Вы вышли на улицу ' + newstr['name'] + '!', reply_markup=kb)
-        locs.update_one({'code': newstr['code']}, {'$push': {'humans': user['id']}})
+        db.locs.update_one({'code': newstr['code']}, {'$push': {'humans': user['id']}})
 
-        street = locs.find_one({'code': newstr['code']})
+        street = db.locs.find_one({'code': newstr['code']})
         for ids in street['humans']:
-            user2 = users.find_one({'id': ids})
+            user2 = db.users.find_one({'id': ids})
             if user2['human']['position']['flat'] == None and user2['human']['position']['building'] == None:
                 if int(ids) != user['id']:
                     bot.send_message(ids, 'На улице появляется ' + desc(user))
@@ -946,15 +813,15 @@ def endwalk(user, newstr, start='street'):
         text = 'На улице вы видите следующих людей:\n\n'
         for ids in street['humans']:
             if ids != user['id']:
-                user2 = users.find_one({'id': ids})
+                user2 = db.users.find_one({'id': ids})
                 if user2['human']['position']['flat'] == None and user2['human']['position']['building'] == None:
-                    text += desc(users.find_one({'id': ids}), True) + '\n\n'
+                    text += desc(db.users.find_one({'id': ids}), True) + '\n\n'
 
         if text != 'На улице вы видите следующих людей:\n\n':
             bot.send_message(user['id'], text)
 
     except:
-        bot.send_message(441399484, traceback.format_exc())
+        bot.send_message(admin_id, traceback.format_exc())
 
 
 @bot.message_handler(content_types=['text'])
@@ -962,7 +829,7 @@ def alltxts(m):
     if m.from_user.id == m.chat.id:
         user = getuser(m.from_user)
         if user['newbie']:
-            users.update_one({'id': user['id']}, {'$set': {'newbie': False}})
+            db.users.update_one({'id': user['id']}, {'$set': {'newbie': False}})
             bot.send_message(m.chat.id,
                              'Здравствуй, новый житель города "Телеград". Не знаю, зачем вы сюда пожаловали, но я в чужие ' +
                              'дела не лезу, как говорится. Я - Пасюк, гид в этом городе. И моя роль - заселять сюда новоприезжих, вот и всё (' +
@@ -987,7 +854,7 @@ def alltxts(m):
             if what == 'name':
                 val = m.text.title()
                 for ids in m.text:
-                    if ids.lower() not in letters:
+                    if not ids.lower().isalpha():
                         allow = False
                         er_text = 'Имя должно содержать не более 50 символов и не может содержать ничего, кроме букв русского алфавита и пробелов!'
             elif what == 'gender':
@@ -1042,7 +909,7 @@ def alltxts(m):
                     er_text = 'Рост может быть от 140 до 200 см!'
 
             if allow:
-                users.update_one({'id': user['id']}, {'$set': {'human.' + what: val, 'wait_for_stat': None}})
+                db.users.update_one({'id': user['id']}, {'$set': {'human.' + what: val, 'wait_for_stat': None}})
                 user = getuser(m.from_user)
 
             if allow == False:
@@ -1063,20 +930,20 @@ def alltxts(m):
 
         if user['human']['position']['street'] != None and user['human']['position']['flat'] == None and \
                 user['human']['position']['building'] == None:
-            street = locs.find_one({'code': user['human']['position']['street']})
+            street = db.locs.find_one({'code': user['human']['position']['street']})
             for hh in street['humans']:
-                h = users.find_one({'id': hh})['human']
+                h = db.users.find_one({'id': hh})['human']
                 if h['position']['flat'] == None and h['position']['building'] == None:
                     bot.send_message(hh, user['human']['name'] + ': ' + m.text)
 
         elif user['human']['position']['flat'] != None:
-            kv = kvs.find_one({'id': user['human']['position']['flat']})
+            kv = db.kvs.find_one({'id': user['human']['position']['flat']})
             for h in kv['humans']:
                 bot.send_message(h, user['human']['name'] + ': ' + m.text)
 
         elif user['human']['position']['building'] != None:
             build = None
-            street = locs.find_one({'code': user['human']['position']['street']})
+            street = db.locs.find_one({'code': user['human']['position']['street']})
             for ids in street['buildings']:
                 if street['buildings'][ids]['code'] == user['human']['position']['building']:
                     build = street['buildings'][ids]
@@ -1106,7 +973,7 @@ def getstartkb(user):
 
 @bot.callback_query_handler(func=lambda call: call.data.split('?')[0] == 'shop')
 def shopping1(call):
-    user = users.find_one({'id': call.from_user.id})
+    user = db.users.find_one({'id': call.from_user.id})
     if user == None:
         return
     h = user['human']
@@ -1134,7 +1001,7 @@ def shopping1(call):
             bot.answer_callback_query(call.id, 'Вы не можете нести такой вес!', show_alert=True)
             return
         prod = init_product(pr, 0)
-        users.update_one({'id': user['id']}, {'$push': {'human.shop_inv': pr}})
+        db.users.update_one({'id': user['id']}, {'$push': {'human.shop_inv': pr}})
         bot.answer_callback_query(call.id, 'Вы положили продукт в телегу для покупок.', show_alert=True)
 
     elif act == 'mainmenu':
@@ -1166,7 +1033,7 @@ def shopping1(call):
             return
         newlist = h['shop_inv']
         newlist.remove(pr)
-        users.update_one({'id': user['id']}, {'$set': {'human.shop_inv': newlist}})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.shop_inv': newlist}})
         bot.answer_callback_query(call.id, 'Вы убрали продукт из телеги и поставили обратно на полку.')
         kb = getbuylist(h)
         medit('Нажмите на продукт для того, чтобы убрать его из телеги.', call.message.chat.id, call.message.message_id,
@@ -1186,9 +1053,9 @@ def shopping1(call):
                                       'Кассир: у вас недостаточно денег (сумма ваших покупок - ' + str(cost) + '💶)!',
                                       show_alert=True)
             return
-        users.update_one({'id': user['id']}, {'$push': {'human.inv': {'$each': h['shop_inv']}}})
-        users.update_one({'id': user['id']}, {'$set': {'human.shop_inv': []}})
-        users.update_one({'id': user['id']}, {'$inc': {'human.money': -cost}})
+        db.users.update_one({'id': user['id']}, {'$push': {'human.inv': {'$each': h['shop_inv']}}})
+        db.users.update_one({'id': user['id']}, {'$set': {'human.shop_inv': []}})
+        db.users.update_one({'id': user['id']}, {'$inc': {'human.money': -cost}})
         medit('Кассир: с вас ' + str(cost) + '💶. Спасибо за покупку, приходите ещё!', call.message.chat.id,
               call.message.message_id)
 
@@ -1204,7 +1071,7 @@ def getbuylist(h):
 @bot.callback_query_handler(func=lambda call: call.data.split('?')[0] == 'show')
 def shopping(call):
     try:
-        user = users.find_one({'id': call.from_user.id})
+        user = db.users.find_one({'id': call.from_user.id})
         if user == None:
             return
         h = user['human']
@@ -1233,7 +1100,7 @@ def shopping(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.split('?')[0] == 'change')
 def changestats(call):
-    user = users.find_one({'id': call.from_user.id})
+    user = db.users.find_one({'id': call.from_user.id})
     if user == None:
         return
     if user['start_stats'] == False:
@@ -1242,7 +1109,7 @@ def changestats(call):
     if what == 'not':
         bot.answer_callback_query(call.id, 'Эту характеристику изменить нельзя!', show_alert=True)
         return
-    users.update_one({'id': user['id']}, {'$set': {'wait_for_stat': what}})
+    db.users.update_one({'id': user['id']}, {'$set': {'wait_for_stat': what}})
     text = 'не определено'
     if what == 'name':
         text = 'Теперь пришлите мне ваше имя.'
@@ -1270,8 +1137,8 @@ def changestats(call):
                   'Чтобы найти какое-то место, вы всегда можете воспользоваться навигатором (/navigator) на своём устройстве. Успехов!',
                   call.message.chat.id, call.message.message_id)
 
-            users.update_one({'id': user['id']}, {'$set': {'start_stats': False}})
-            users.update_one({'id': user['id']}, {'$set': {'wait_for_stat': False}})
+            db.users.update_one({'id': user['id']}, {'$set': {'start_stats': False}})
+            db.users.update_one({'id': user['id']}, {'$set': {'wait_for_stat': False}})
 
             time.sleep(2)
             bot.send_message(call.message.chat.id,
@@ -1414,16 +1281,18 @@ def createkv(user, hom, street):
 
 
 def getuser(u):
-    user = users.find_one({'id': u.id})
+    user = db.users.find_one({'id': u.id})
     if user == None:
-        users.insert_one(createuser(u))
-        user = users.find_one({'id': u.id})
+        db.users.insert_one(createuser(u))
+        user = db.users.find_one({'id': u.id})
         hom = user['human']['home']
         street = user['human']['street']
-        kvs.insert_one(createkv(u, hom, street))
+        db.kvs.insert_one(createkv(u, hom, street))
     return user
 
 
 def medit(message_text, chat_id, message_id, reply_markup=None, parse_mode=None):
     return bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=message_text, reply_markup=reply_markup,
                                  parse_mode=parse_mode)
+
+bot.polling()
